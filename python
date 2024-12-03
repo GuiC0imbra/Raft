@@ -1,0 +1,127 @@
+import threading
+import time
+import random
+
+FOLLOWER = "Follower"
+CANDIDATE = "Candidate"
+LEADER = "Leader"
+
+class Node:
+    def __init__(self, node_id, cluster):
+        self.node_id = node_id
+        self.cluster = cluster
+        self.state = FOLLOWER
+        self.current_term = 0
+        self.voted_for = None
+        self.log = []
+        self.commit_index = -1
+        self.votes_received = 0
+        self.timeout = random.uniform(5, 10)  
+        self.alive = True  # Simulação de falha
+        self.lock = threading.Lock()  
+        self.timer = threading.Thread(target=self.election_timer)
+        self.timer.start()
+
+    def send_message(self, to_node, message):
+        # Simula a entrega de mensagens
+        if self.alive:
+            time.sleep(random.uniform(0.1, 0.5))  
+            self.cluster[to_node].receive_message(self.node_id, message)
+
+    def receive_message(self, from_node, message):
+        with self.lock:
+            if not self.alive:
+                return
+            term = message["term"]
+            if term > self.current_term:
+                self.current_term = term
+                self.state = FOLLOWER
+                self.voted_for = None
+            
+            if message["type"] == "RequestVote":
+                self.handle_vote_request(from_node, message)
+            elif message["type"] == "AppendEntries":
+                self.handle_append_entries(from_node, message)
+
+    def handle_vote_request(self, from_node, message):
+        if (self.voted_for is None or self.voted_for == from_node) and message["term"] >= self.current_term:
+            self.voted_for = from_node
+            self.send_message(from_node, {"type": "VoteGranted", "term": self.current_term})
+            print(f"Node {self.node_id}: Granted vote to Node {from_node} for term {self.current_term}")
+        else:
+            print(f"Node {self.node_id}: Denied vote to Node {from_node}")
+
+    def handle_append_entries(self, from_node, message):
+        # Reseta o timer ao receber AppendEntries de um líder
+        self.timeout = random.uniform(5, 10)
+        print(f"Node {self.node_id}: Received heartbeat from Leader {from_node}")
+
+    def election_timer(self):
+        while True:
+            if not self.alive:
+                time.sleep(1)
+                continue
+
+            time.sleep(1)
+            self.timeout -= 1
+            if self.timeout <= 0 and self.state != LEADER:
+                self.start_election()
+
+    def start_election(self):
+        with self.lock:
+            self.state = CANDIDATE
+            self.current_term += 1
+            self.voted_for = self.node_id
+            self.votes_received = 1  
+            print(f"Node {self.node_id}: Starting election for term {self.current_term}")
+            
+            for node_id in self.cluster:
+                if node_id != self.node_id:
+                    self.send_message(node_id, {
+                        "type": "RequestVote",
+                        "term": self.current_term
+                    })
+
+    def receive_vote(self, from_node):
+        with self.lock:
+            self.votes_received += 1
+            print(f"Node {self.node_id}: Received vote from Node {from_node}")
+            if self.votes_received > len(self.cluster) // 2 and self.state == CANDIDATE:
+                self.state = LEADER
+                print(f"Node {self.node_id}: Became Leader for term {self.current_term}")
+                self.send_heartbeats()
+
+    def send_heartbeats(self):
+        while self.state == LEADER:
+            print(f"Node {self.node_id}: Sending heartbeats")
+            for node_id in self.cluster:
+                if node_id != self.node_id:
+                    self.send_message(node_id, {"type": "AppendEntries", "term": self.current_term})
+            time.sleep(2)
+
+    def simulate_failure(self):
+        with self.lock:
+            self.alive = False
+            print(f"Node {self.node_id}: Simulated failure")
+
+    def recover(self):
+        with self.lock:
+            self.alive = True
+            self.timeout = random.uniform(5, 10)
+            print(f"Node {self.node_id}: Recovered from failure")
+
+
+def simulate_raft():
+    num_nodes = 5
+    cluster = {}
+    
+    for i in range(num_nodes):
+        cluster[i] = Node(i, cluster)
+    
+    time.sleep(10)
+    cluster[2].simulate_failure()
+    time.sleep(5)
+    cluster[2].recover()
+
+simulate_raft_thread = threading.Thread(target=simulate_raft)
+simulate_raft_thread.start()
